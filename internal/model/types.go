@@ -17,6 +17,7 @@ type RepoConfig struct {
 	MountPath         string
 	RemoteURL         string
 	RemoteURLRedacted string
+	RemoteName        string
 	Branch            string
 	RefreshInterval   time.Duration
 	GitDir            string
@@ -152,6 +153,13 @@ type SnapshotStore interface {
 	PublishGeneration(ctx context.Context, headOID string, ref string, nodes []BaseNode) (generation int64, err error)
 	GetNode(generation int64, path string) (BaseNode, bool)
 	ListChildren(generation int64, parentPath string) ([]BaseNode, error)
+	UpdateSize(generation int64, objectOID string, size int64) (int64, error)
+}
+
+// SizeResolver resolves blob sizes via cache, network, or fallback. The
+// SnapshotStore-bound resolver uses this to fill in unknown sizes lazily.
+type SizeResolver interface {
+	ResolveSize(ctx context.Context, repo RepoConfig, oid string) (int64, error)
 }
 
 type OverlayStore interface {

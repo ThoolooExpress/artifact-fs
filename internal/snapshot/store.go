@@ -28,6 +28,12 @@ var migrations = []string{
 	  PRIMARY KEY (generation, path)
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_base_nodes_gen_parent ON base_nodes(generation, parent_path);`,
+	`CREATE TABLE IF NOT EXISTS oid_sizes (
+	  object_oid TEXT PRIMARY KEY,
+	  size_bytes INTEGER NOT NULL,
+	  source TEXT NOT NULL,
+	  resolved_at INTEGER NOT NULL
+	);`,
 	`DROP TABLE IF EXISTS learned_path_stats;`,
 	`DROP TABLE IF EXISTS blob_cache_index;`,
 }
@@ -160,11 +166,40 @@ func (s *Store) ListChildren(generation int64, parentPath string) ([]model.BaseN
 	return out, rows.Err()
 }
 
-// UpdateSize sets the size for a blob after hydration. Updates all rows with
+// UpdateSize sets the size for a blob after resolution. Updates all rows with
 // the given OID in the current generation so stat() returns the correct size
-// without waiting for a full re-index.
-func (s *Store) UpdateSize(generation int64, objectOID string, size int64) {
-	s.db.Exec(`UPDATE base_nodes SET size_bytes=?, size_state='known' WHERE generation=? AND object_oid=?`, size, generation, objectOID)
+// without waiting for a full re-index. Returns the number of rows updated.
+func (s *Store) UpdateSize(generation int64, objectOID string, size int64) (int64, error) {
+	res, err := s.db.Exec(`UPDATE base_nodes SET size_bytes=?, size_state='known' WHERE generation=? AND object_oid=?`, size, generation, objectOID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// GetOIDSize returns a cached size for the given OID, if present. The cache is
+// keyed by OID alone since blob content (and thus size) is immutable.
+func (s *Store) GetOIDSize(ctx context.Context, oid string) (int64, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT size_bytes FROM oid_sizes WHERE object_oid=?`, oid)
+	var size int64
+	if err := row.Scan(&size); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return size, true, nil
+}
+
+// PutOIDSize records a resolved size for the given OID. Source is one of
+// "object-info", "fetch", or "index" — used for diagnostics only.
+func (s *Store) PutOIDSize(ctx context.Context, oid string, size int64, source string, resolvedAt int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO oid_sizes(object_oid, size_bytes, source, resolved_at) VALUES(?,?,?,?) ON CONFLICT(object_oid) DO UPDATE SET size_bytes=excluded.size_bytes, source=excluded.source, resolved_at=excluded.resolved_at`, oid, size, source, resolvedAt)
+	return err
 }
 
 func (s *Store) nextGenerationTx(ctx context.Context, tx *sql.Tx) (int64, error) {

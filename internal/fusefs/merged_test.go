@@ -30,6 +30,17 @@ func (f *fakeSnapshot) ListChildren(_ int64, path string) ([]model.BaseNode, err
 	return nil, errors.New("not found")
 }
 
+func (f *fakeSnapshot) UpdateSize(_ int64, oid string, size int64) (int64, error) {
+	for path, n := range f.nodes {
+		if n.ObjectOID == oid {
+			n.SizeBytes = size
+			n.SizeState = "known"
+			f.nodes[path] = n
+		}
+	}
+	return 0, nil
+}
+
 // fakeOverlay satisfies model.OverlayStore for testing.
 type fakeOverlay struct {
 	entries map[string]model.OverlayEntry
@@ -100,7 +111,7 @@ func TestGetattrReturnsMtime(t *testing.T) {
 			entries: map[string]model.OverlayEntry{"x.txt": {Path: "x.txt", Kind: model.OverlayKindCreate, Mode: 0o644, SizeBytes: 10, MtimeUnixNs: mtime}},
 		},
 	)
-	_, _, _, mt, err := r.Getattr("x.txt")
+	_, _, _, mt, err := r.Getattr(context.Background(), "x.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +129,7 @@ func TestGetattrBaseFileUsesCommitTime(t *testing.T) {
 	commitTS := int64(1700000000) // 2023-11-14
 	r.SetCommitTime(commitTS)
 
-	_, _, _, mt, err := r.Getattr("b.txt")
+	_, _, _, mt, err := r.Getattr(context.Background(), "b.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +145,7 @@ func TestGetattrBaseFileFallsBackToGeneration(t *testing.T) {
 		&fakeOverlay{entries: map[string]model.OverlayEntry{}},
 	)
 	// Don't set commit time -- should fall back to generation.
-	_, _, _, mt, err := r.Getattr("b.txt")
+	_, _, _, mt, err := r.Getattr(context.Background(), "b.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

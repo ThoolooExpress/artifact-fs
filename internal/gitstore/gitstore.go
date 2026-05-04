@@ -453,6 +453,41 @@ func (b *batchCatFile) fetchToFile(oid string, dstPath string) (int64, error) {
 	return size, nil
 }
 
+// ResolveBlobSize asks `git cat-file --batch-check` for the blob size. On a
+// blobless clone with a promisor remote, this triggers a lazy-fetch that
+// downloads the blob (potentially expensive). It is the fallback for clients
+// that do not advertise protocol-v2 `object-info`.
+func (s *Store) ResolveBlobSize(ctx context.Context, repo model.RepoConfig, objectOID string) (int64, error) {
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "--batch-check")
+	cmd.Env = append(os.Environ(), "GIT_DIR="+repo.GitDir)
+	cmd.Stdin = strings.NewReader(objectOID + "\n")
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		msg := auth.RedactString(strings.TrimSpace(errBuf.String()))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return 0, errors.New(msg)
+	}
+	fields := strings.Fields(strings.TrimSpace(outBuf.String()))
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("unexpected cat-file output %q", outBuf.String())
+	}
+	if fields[1] == "missing" {
+		return 0, fmt.Errorf("object %s missing", objectOID)
+	}
+	if len(fields) < 3 {
+		return 0, fmt.Errorf("unexpected cat-file output %q", outBuf.String())
+	}
+	size, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse size %q: %w", fields[2], err)
+	}
+	return size, nil
+}
+
 // CommitTimestamp returns the committer timestamp of the given commit OID.
 func (s *Store) CommitTimestamp(ctx context.Context, repo model.RepoConfig, oid string) (int64, error) {
 	out, err := runGit(ctx, repo.GitDir, "show", "-s", "--format=%ct", oid)

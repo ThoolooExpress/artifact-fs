@@ -38,6 +38,8 @@ type Resolver struct {
 	commitTime atomic.Int64 // unix seconds of HEAD commit
 	Snapshot   model.SnapshotStore
 	Overlay    model.OverlayStore
+	Sizes      model.SizeResolver
+	Repo       model.RepoConfig
 }
 
 func (r *Resolver) SetGeneration(gen int64) { r.generation.Store(gen) }
@@ -73,7 +75,7 @@ func (r *Resolver) Lookup(parent, name string) (ResolvedNode, error) {
 	return r.ResolvePath(p)
 }
 
-func (r *Resolver) Getattr(path string) (mode uint32, size int64, nodeType string, mtime time.Time, err error) {
+func (r *Resolver) Getattr(ctx context.Context, path string) (mode uint32, size int64, nodeType string, mtime time.Time, err error) {
 	n, err := r.ResolvePath(path)
 	if err != nil {
 		return 0, 0, "", time.Time{}, err
@@ -91,7 +93,29 @@ func (r *Resolver) Getattr(path string) (mode uint32, size int64, nodeType strin
 		ct = r.Generation() // fallback: commit time unavailable
 	}
 	mt := time.Unix(ct, 0)
-	return mode, n.Base.SizeBytes, n.Base.Type, mt, nil
+	size = r.resolveSize(ctx, n.Base)
+	return mode, size, n.Base.Type, mt, nil
+}
+
+// resolveSize returns a known size for a base node. Falls back to the
+// configured SizeResolver when the snapshot row has SizeState=="unknown" and
+// the node refers to a file blob. On resolution failure the returned size is
+// 0 — same as today, no FUSE-op regression.
+func (r *Resolver) resolveSize(ctx context.Context, n model.BaseNode) int64 {
+	if n.SizeState == "known" {
+		return n.SizeBytes
+	}
+	if n.Type != "file" || n.ObjectOID == "" || r.Sizes == nil {
+		return n.SizeBytes
+	}
+	size, err := r.Sizes.ResolveSize(ctx, r.Repo, n.ObjectOID)
+	if err != nil {
+		return 0
+	}
+	if r.Snapshot != nil {
+		_, _ = r.Snapshot.UpdateSize(r.Generation(), n.ObjectOID, size)
+	}
+	return size
 }
 
 // normalizeMode ensures sane permission bits. Git tree entries have mode 040000

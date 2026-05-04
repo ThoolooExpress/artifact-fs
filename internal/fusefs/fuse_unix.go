@@ -163,7 +163,7 @@ func (fs *ArtifactFuse) StatFS(_ context.Context, op *fuseops.StatFSOp) error {
 	return nil
 }
 
-func (fs *ArtifactFuse) LookUpInode(_ context.Context, op *fuseops.LookUpInodeOp) error {
+func (fs *ArtifactFuse) LookUpInode(ctx context.Context, op *fuseops.LookUpInodeOp) error {
 	parent, err := fs.requireInode(op.Parent, syscall.ENOENT)
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func (fs *ArtifactFuse) LookUpInode(_ context.Context, op *fuseops.LookUpInodeOp
 		return nil
 	}
 
-	mode, size, typ, mtime, err := fs.resolver.Getattr(childPath)
+	mode, size, typ, mtime, err := fs.resolver.Getattr(ctx, childPath)
 	if err != nil {
 		if errors.Is(err, iofs.ErrNotExist) {
 			return syscall.ENOENT
@@ -200,7 +200,7 @@ func (fs *ArtifactFuse) LookUpInode(_ context.Context, op *fuseops.LookUpInodeOp
 	return nil
 }
 
-func (fs *ArtifactFuse) GetInodeAttributes(_ context.Context, op *fuseops.GetInodeAttributesOp) error {
+func (fs *ArtifactFuse) GetInodeAttributes(ctx context.Context, op *fuseops.GetInodeAttributesOp) error {
 	ref, err := fs.requireInode(op.Inode, syscall.ESTALE)
 	if err != nil {
 		return err
@@ -212,7 +212,7 @@ func (fs *ArtifactFuse) GetInodeAttributes(_ context.Context, op *fuseops.GetIno
 		return nil
 	}
 
-	mode, size, typ, mtime, err := fs.resolver.Getattr(ref.Path)
+	mode, size, typ, mtime, err := fs.resolver.Getattr(ctx, ref.Path)
 	if err != nil {
 		return syscall.ENOENT
 	}
@@ -235,7 +235,7 @@ func (fs *ArtifactFuse) SetInodeAttributes(ctx context.Context, op *fuseops.SetI
 	if op.Mtime != nil {
 		fs.engine.SetMtime(ctx, ref.Path, *op.Mtime)
 	}
-	mode, size, typ, mtime, err := fs.resolver.Getattr(ref.Path)
+	mode, size, typ, mtime, err := fs.resolver.Getattr(ctx, ref.Path)
 	if err != nil {
 		return syscall.EIO
 	}

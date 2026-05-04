@@ -14,12 +14,14 @@ import (
 
 	"github.com/cloudflare/artifact-fs/internal/auth"
 	"github.com/cloudflare/artifact-fs/internal/fusefs"
+	"github.com/cloudflare/artifact-fs/internal/gitproto"
 	"github.com/cloudflare/artifact-fs/internal/gitstore"
 	"github.com/cloudflare/artifact-fs/internal/hydrator"
 	"github.com/cloudflare/artifact-fs/internal/meta"
 	"github.com/cloudflare/artifact-fs/internal/model"
 	"github.com/cloudflare/artifact-fs/internal/overlay"
 	"github.com/cloudflare/artifact-fs/internal/registry"
+	"github.com/cloudflare/artifact-fs/internal/sizes"
 	"github.com/cloudflare/artifact-fs/internal/snapshot"
 	"github.com/cloudflare/artifact-fs/internal/watcher"
 )
@@ -374,12 +376,13 @@ func (s *Service) mountRepo(ctx context.Context, cfg model.RepoConfig) error {
 	}
 	h := hydrator.New(s.git)
 
-	resolver := &fusefs.Resolver{Snapshot: snap, Overlay: ov}
+	sizeResolver := sizes.New(snap, s.protoFactory(), s.git, s.logger)
+	resolver := &fusefs.Resolver{Snapshot: snap, Overlay: ov, Sizes: sizeResolver, Repo: cfg}
 	resolver.SetGeneration(gen)
 	s.refreshCommitTime(ctx, cfg, headOID, resolver, "commit timestamp unavailable, mtime will use generation fallback")
 
 	h.SetOnHydrated(func(_ model.RepoID, objectOID string, size int64) {
-		snap.UpdateSize(resolver.Generation(), objectOID, size)
+		_, _ = snap.UpdateSize(resolver.Generation(), objectOID, size)
 	})
 	h.Start(s.hydrationWorkers(), cfg)
 	engine := &fusefs.Engine{
@@ -682,6 +685,9 @@ func (s *Service) stopRuntime(rt *repoRuntime) {
 }
 
 func (s *Service) fillPaths(cfg *model.RepoConfig) {
+	if cfg.RemoteName == "" {
+		cfg.RemoteName = "origin"
+	}
 	if cfg.MountRoot == "" {
 		if s.mountRoot != "" {
 			cfg.MountRoot = s.mountRoot
@@ -706,6 +712,21 @@ func (s *Service) fillPaths(cfg *model.RepoConfig) {
 	}
 	if cfg.OverlayDBPath == "" {
 		cfg.OverlayDBPath = filepath.Join(cfg.OverlayDir, "meta.sqlite")
+	}
+}
+
+// protoFactory returns a closure that builds a protocol-v2 client per request.
+// It returns nil for repos whose remote URL is empty; the resolver treats nil
+// as "go straight to fallback".
+func (s *Service) protoFactory() sizes.ProtoFactory {
+	return func(repo model.RepoConfig) sizes.ProtoClient {
+		if repo.RemoteURL == "" {
+			return nil
+		}
+		return gitproto.NewClient(repo.RemoteURL,
+			gitproto.WithAuth(gitproto.GitCredentialAuth{}),
+			gitproto.WithLogger(s.logger),
+		)
 	}
 }
 
